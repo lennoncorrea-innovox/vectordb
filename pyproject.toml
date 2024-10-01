@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vectordb"
+version = "2024.0.0"
+dependencies = [
+    "numpy>=1.26.4",
+    "faiss-cpu>=1.8.0",
+    "pymilvus==2.4.7",
+    "qdrant-client>=1.11.1"
+]
+requires-python = ">=3.9"
+description = "A wrapper that uses a common interface for vector databases"
+readme = "readme.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vectordb"]
