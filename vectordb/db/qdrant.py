@@ -13,7 +13,12 @@ from qdrant_client.http.models import (
     MatchValue,
     Distance as QdrantDistance,
 )
-from .vector_db import Distance, DistanceResponse, IdResponse, VectorDB
+from .vector_db import (
+    Distance,
+    SearchItem,
+    SearchResult,
+    VectorDB,
+)
 
 
 class Qdrant(VectorDB):
@@ -71,7 +76,7 @@ class Qdrant(VectorDB):
         query: Union[np.ndarray, List[np.ndarray]],
         top_k: int = 5,
         filter: dict = None,
-    ) -> Tuple[IdResponse, DistanceResponse]:
+    ) -> List[SearchResult]:
         if isinstance(query, list):
             return self._search_vectors(collection_name, query, top_k, filter)
 
@@ -138,10 +143,11 @@ class Qdrant(VectorDB):
         if not search_result:
             return None
 
-        ids = [result.id for result in search_result]
-        scores = [result.score for result in search_result]
+        search_result = [
+            SearchItem(result.id, result.score) for result in search_result
+        ]
 
-        return [ids], [scores]
+        return [search_result]
 
     def _search_vectors(
         self,
@@ -170,19 +176,25 @@ class Qdrant(VectorDB):
         if not search_results or not search_results[0]:
             return None
 
-        ids = [[result.id for result in results] for results in search_results]
-        scores = [[result.score for result in results] for results in search_results]
+        search_results = [
+            [SearchItem(result.id, result.score) for result in results]
+            for results in search_results
+        ]
 
-        return ids, scores
+        return search_results
 
     def _get(self, collection_name: str, id):
-        result = self._client.retrieve(collection_name, [id], with_vectors=True)
+        result = self._client.retrieve(
+            collection_name, [id], with_vectors=True, with_payload=False
+        )
         if result:
             result = np.array(result[0].vector)
             return [result]
 
     def _get_many(self, collection_name: str, id):
-        results = self._client.retrieve(collection_name, id, with_vectors=True)
+        results = self._client.retrieve(
+            collection_name, id, with_vectors=True, with_payload=False
+        )
         if results:
             result = [np.array(result.vector) for result in results]
             return result
