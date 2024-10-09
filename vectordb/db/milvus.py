@@ -10,7 +10,7 @@ class Milvus(VectorDB):
     def __init__(self, host: str = "localhost", port: str = "19530"):
         self.client = MilvusClient(f"http://{host}:{port}")
 
-    def create_collection(
+    def try_create_collection(
         self,
         collection_name: str,
         dimension: int,
@@ -84,7 +84,7 @@ class Milvus(VectorDB):
         except Exception as e:
             logging.error(f"Error inserting vectors: {e}")
 
-    def get(self, collection_name: str, id: Union[str, list[str]]):
+    def get_by_id(self, collection_name: str, id: Union[str, list[str]]):
         if isinstance(id, list):
             result = self._get_many(collection_name, id)
         else:

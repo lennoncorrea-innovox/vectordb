@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Tuple, Union
+from typing import List, Dict, Any, Tuple, Union, overload
 import numpy as np
 from uuid import uuid4
 from qdrant_client import QdrantClient
@@ -15,7 +15,7 @@ from qdrant_client.http.models import (
 )
 from .vector_db import (
     Distance,
-    SearchItem,
+    Item,
     SearchResult,
     VectorDB,
 )
@@ -25,7 +25,7 @@ class Qdrant(VectorDB):
     def __init__(self, host: str = "localhost", port: int = 6333):
         self._client = QdrantClient(host=host, port=port)
 
-    def create_collection(
+    def try_create_collection(
         self,
         collection_name: str,
         dimension: int,
@@ -65,10 +65,34 @@ class Qdrant(VectorDB):
         self._client.upsert(collection_name=collection_name, points=points, wait=False)
         logging.info(f"Added {len(vectors)} vectors to collection '{collection_name}'.")
 
-    def get(self, collection_name: str, id) -> List[np.ndarray]:
+
+    def get(self, collection_name, id_or_filter: Union[dict, list, str], top_k=5):
+        if isinstance(id_or_filter, dict):
+            return self.scroll(collection_name, id_or_filter, top_k)
+        return self.get_by_id(collection_name, id_or_filter)
+
+    def get_by_id(self, collection_name: str, id):
         if isinstance(id, list):
             return self._get_many(collection_name, id)
         return self._get(collection_name, id)
+
+    def scroll(self, collection_name: str, filter: dict = None, top_k=5):
+        if filter:
+            filter = self._parse_filter(filter)
+
+        scroll_result, _ = self._client.scroll(
+            collection_name=collection_name,
+            scroll_filter=filter,
+            limit=top_k,
+            with_payload=True,
+            with_vectors=True,
+        )
+
+        result = [
+            Item(id=result.id, payload=result.payload, vector=np.array(result.vector))
+            for result in scroll_result
+        ]
+        return result
 
     def search(
         self,
@@ -77,6 +101,10 @@ class Qdrant(VectorDB):
         top_k: int = 5,
         filter: dict = None,
     ) -> List[SearchResult]:
+        if not self._client.collection_exists(collection_name):
+            logging.warning(f"'{collection_name}' was not created.")
+            return None
+
         if isinstance(query, list):
             return self._search_vectors(collection_name, query, top_k, filter)
 
@@ -121,14 +149,10 @@ class Qdrant(VectorDB):
     def _search_vector(
         self,
         collection_name: str,
-        query_vector: Union[List[float], np.ndarray],
+        query_vector: np.ndarray,
         top_k: int = 5,
         filter: dict = None,
     ):
-        if isinstance(query_vector, np.ndarray):
-            if query_vector.ndim == 2:
-                query_vector = query_vector.squeeze(0)
-
         if filter:
             filter = self._parse_filter(filter)
 
@@ -136,23 +160,22 @@ class Qdrant(VectorDB):
             collection_name=collection_name,
             query_vector=query_vector,
             limit=top_k,
-            with_vectors=False,
             query_filter=filter,
+            with_vectors=False,
+            with_payload=True,
         )
 
         if not search_result:
             return None
 
-        search_result = [
-            SearchItem(result.id, result.score) for result in search_result
-        ]
+        search_result = [Item(result.id, result.score) for result in search_result]
 
         return [search_result]
 
     def _search_vectors(
         self,
         collection_name: str,
-        query_vectors: List[np.ndarray],
+        queries: List[np.ndarray],
         top_k: int = 5,
         filter: dict = None,
     ):
@@ -161,12 +184,13 @@ class Qdrant(VectorDB):
 
         search_requests = [
             SearchRequest(
-                vector=np.array(vector),
+                vector=vector,
                 limit=top_k,
-                with_vector=False,
                 filter=filter,
+                with_vector=False,
+                with_payload=True,
             )
-            for vector in query_vectors
+            for vector in queries
         ]
 
         search_results = self._client.search_batch(
@@ -177,7 +201,10 @@ class Qdrant(VectorDB):
             return None
 
         search_results = [
-            [SearchItem(result.id, result.score) for result in results]
+            [
+                Item(id=result.id, score=result.score, payload=result.payload)
+                for result in results
+            ]
             for results in search_results
         ]
 
@@ -185,18 +212,23 @@ class Qdrant(VectorDB):
 
     def _get(self, collection_name: str, id):
         result = self._client.retrieve(
-            collection_name, [id], with_vectors=True, with_payload=False
+            collection_name, [id], with_vectors=True, with_payload=True
         )
         if result:
-            result = np.array(result[0].vector)
+            result = Item(
+                id=id, vector=np.array(result[0].vector), payload=result[0].payload
+            )
             return [result]
 
     def _get_many(self, collection_name: str, id):
         results = self._client.retrieve(
-            collection_name, id, with_vectors=True, with_payload=False
+            collection_name, id, with_vectors=True, with_payload=True
         )
         if results:
-            result = [np.array(result.vector) for result in results]
+            result = [
+                Item(id=id, vector=np.array(result.vector), payload=result.payload)
+                for result in results
+            ]
             return result
 
     def _parse_filter(self, filters: dict):
